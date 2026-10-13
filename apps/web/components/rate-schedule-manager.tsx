@@ -168,11 +168,11 @@ function compactMetadataSummary(schedule: Pick<RateSchedule, "metadata">) {
   ].filter(Boolean).join(" · ");
 }
 
-function normalizeCurrency(value: string | null | undefined, fallback = "USD") {
+function normalizeCurrency(value: string | null | undefined, fallback = "unknown") {
   const normalized = (value ?? "").trim().toUpperCase();
   if (normalized.length === 3) return normalized;
   const fallbackNormalized = fallback.trim().toUpperCase();
-  return fallbackNormalized.length === 3 ? fallbackNormalized : "USD";
+  return fallbackNormalized.length === 3 ? fallbackNormalized : "unknown";
 }
 
 /* ─── Types ─── */
@@ -623,7 +623,7 @@ export function RateScheduleManager({
   // Create-new mode (uses the same drawer as edit)
   const [isCreating, setIsCreating] = useState(false);
   const [creatingSaving, setCreatingSaving] = useState(false);
-  const [organizationCurrency, setOrganizationCurrency] = useState("USD");
+  const [organizationCurrency, setOrganizationCurrency] = useState("unknown");
 
   useEffect(() => {
     getSettings()

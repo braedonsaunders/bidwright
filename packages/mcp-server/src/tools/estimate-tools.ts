@@ -654,12 +654,12 @@ export function registerEstimateTools(server: McpServer) {
     },
     async ({ summary }) => {
       const finalized = await apiPost(`/api/estimate/${getProjectId()}/finalize`, summary);
-      return { content: [{ type: "text" as const, text: JSON.stringify({ message: "Estimate strategy finalized", laborBasis: finalized.workspace?.laborBasis, pricingIntegrity: finalized.workspace?.pricingIntegrity, unlinkedMeasurements: finalized.workspace?.unlinkedMeasurements }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({ message: "Estimate strategy finalized", laborBasis: finalized.workspace?.laborBasis, pricingIntegrity: finalized.workspace?.pricingIntegrity, documentCoverage: finalized.workspace?.documentCoverage, unlinkedMeasurements: finalized.workspace?.unlinkedMeasurements }) }] };
     },
   );
 }
 
 async function estimateReviewFacts() {
   const { workspace } = await apiGet(`/projects/${getProjectId()}/workspace`);
-  return { laborBasis: workspace?.laborBasis, pricingIntegrity: workspace?.pricingIntegrity, unlinkedMeasurements: workspace?.unlinkedMeasurements };
+  return { laborBasis: workspace?.laborBasis, pricingIntegrity: workspace?.pricingIntegrity, documentCoverage: workspace?.documentCoverage, unlinkedMeasurements: workspace?.unlinkedMeasurements };
 }

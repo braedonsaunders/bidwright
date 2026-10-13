@@ -1,3 +1,4 @@
+import { getDocumentCoverage } from "./services/document-coverage.js";
 import { indexLaborUnitPage, searchLaborVectors, prepareLaborSemanticBatch, type LaborSemanticBatch } from "./services/labor-vector-index.js";
 import { laborSearchProfile, rankLaborCandidates, laborGranularityFacts } from "./services/labor-search.js";
 import { summarizeLaborBasis, summarizePricingIntegrity, summarizeUnlinkedMeasurements, laborUnitPresentation } from "@bidwright/domain";
@@ -577,7 +578,7 @@ function buildSnapshotForItem(item: WorksheetItem): PersistedCostSnapshot {
   const snapshotAt = new Date().toISOString();
   const originalUnitCost = Number(item.cost) || 0;
   if (item.rateScheduleItemId) {
-    return { source: "rate_schedule", sourceId: item.rateScheduleItemId, snapshotAt, originalUnitCost };
+    return { source: "rate_schedule", sourceId: item.rateScheduleItemId, snapshotAt, originalUnitCost, currency: item.rateResolution?.currency ?? "unknown" };
   }
   if (item.effectiveCostId) {
     return { source: "effective_cost", sourceId: item.effectiveCostId, snapshotAt, originalUnitCost };
@@ -5443,12 +5444,13 @@ export class PrismaApiStore {
   async getWorkspace(projectId: string) {
     await this.requireProject(projectId);
     const store = await this.buildStoreSnapshot(projectId);
-    const workspace = buildProjectWorkspace(store, projectId);
-    if (!workspace) return workspace;
+    const built = buildProjectWorkspace(store, projectId);
+    if (!built) return built;
+    const workspace = { ...built, quoteCurrency: (await this.getOrganizationDefaults()).currency ?? "unknown" };
     const pickups = await this.db.pickup.findMany({ where: { projectId }, select: {
       id: true, label: true, documentId: true, annotationType: true, measurement: true, _count: { select: { pickupLinks: true } },
     }, orderBy: { createdAt: "asc" } });
-    return { ...workspace, laborBasis: summarizeLaborBasis(workspace), pricingIntegrity: summarizePricingIntegrity(workspace), unlinkedMeasurements: summarizeUnlinkedMeasurements(workspace, pickups) };
+    return { ...workspace, documentCoverage: await getDocumentCoverage(projectId, this.db), laborBasis: summarizeLaborBasis(workspace), pricingIntegrity: summarizePricingIntegrity(workspace), unlinkedMeasurements: summarizeUnlinkedMeasurements(workspace, pickups) };
   }
 
   /**
@@ -11313,22 +11315,12 @@ export class PrismaApiStore {
     });
   }
 
-  private assertRevisionRateBookItemPatchIsSellSideOnly(
-    schedule: { scope: string },
-    patch: { costRates?: unknown; burden?: unknown; perDiem?: unknown; metadata?: unknown },
-  ) {
-    if (schedule.scope !== "revision") return;
-    if (
-      patch.costRates !== undefined ||
-      patch.burden !== undefined ||
-      patch.perDiem !== undefined ||
-      this.metadataTouchesRateBookCostSide(patch.metadata)
-    ) {
-      throw badRequestError("Imported quote Ratebooks can only modify sell rates. Cost rates and cost-side components remain locked to the imported cost basis.");
+  private assertRateBookItemCostFieldsAreClean(input: { rates?: Record<string, number>; costRates?: Record<string, number>; burden?: unknown; perDiem?: unknown; metadata?: unknown }) {
+    for (const rates of [input.rates, input.costRates]) {
+      if (rates && Object.values(rates).some(rate => !Number.isFinite(rate) || rate < 0)) {
+        throw badRequestError("Rate values must be finite, nonnegative numbers.");
+      }
     }
-  }
-
-  private assertRateBookItemCostFieldsAreClean(input: { burden?: unknown; perDiem?: unknown; metadata?: unknown }) {
     if (input.burden !== undefined && Number(input.burden) !== 0) {
       throw badRequestError("Ratebook item variable costs belong on ratebook-level Components, not item burden fields.");
     }
@@ -11358,7 +11350,7 @@ export class PrismaApiStore {
         expiryDate: input.expiryDate ?? null,
         defaultMarkup: input.defaultMarkup ?? 0,
         autoCalculate: input.autoCalculate ?? true,
-        metadata: ({ ...(input.metadata ?? {}), entityCategoryId: entityCategory.id } as any),
+        metadata: ({ ...(input.metadata ?? {}), currency: input.metadata?.currency ?? (await this.getOrganizationDefaults()).currency ?? null, entityCategoryId: entityCategory.id } as any),
       },
       include: rateScheduleCalcInclude,
     });
@@ -11483,12 +11475,13 @@ export class PrismaApiStore {
         roundMoney(nextCost) === roundMoney(domainItem.cost) &&
         roundMoney(nextPrice) === roundMoney(domainItem.price) &&
         nextRateScheduleItemId === (domainItem.rateScheduleItemId ?? null);
-      if (unchanged) continue;
+      if (unchanged && JSON.stringify({ ...calculated.rateResolution, resolvedAt: undefined }) === JSON.stringify({ ...domainItem.rateResolution, resolvedAt: undefined })) continue;
 
       domainItem.cost = nextCost;
       domainItem.price = nextPrice;
       domainItem.markup = nextMarkup;
       domainItem.rateScheduleItemId = nextRateScheduleItemId;
+      domainItem.rateResolution = calculated.rateResolution;
       const costSnapshot = buildSnapshotForItem(domainItem);
 
       await this.db.worksheetItem.update({
@@ -11588,9 +11581,7 @@ export class PrismaApiStore {
     if (!catalogItem) {
       throw badRequestError("Ratebook items must be linked to a catalog item. Set base cost on Resources > Catalogue > Item, then add the resource to the ratebook.");
     }
-    if (input.costRates !== undefined && Object.keys(input.costRates).length > 0) {
-      throw badRequestError("Ratebook item costs come from the catalog item unit cost. Edit cost on Resources > Catalogue > Item.");
-    }
+
     this.assertRateBookItemCostFieldsAreClean(input);
     if (resource && input.catalogItemId && resource.catalogItemId && resource.catalogItemId !== input.catalogItemId) {
       throw new Error(`Resource ${resource.id} is linked to catalog item ${resource.catalogItemId}, not ${input.catalogItemId}.`);
@@ -11617,7 +11608,7 @@ export class PrismaApiStore {
         name: resource?.name || catalogItem?.name || "",
         unit: resource?.defaultUom || catalogItem?.unit || "EA",
         rates: (input.rates ?? seedByTier(basePrice)) as any,
-        costRates: {},
+        costRates: input.costRates ?? {},
         burden: 0, perDiem: 0,
         metadata: (input.metadata ?? {}) as any,
         sortOrder: input.sortOrder ?? ((maxOrder._max.sortOrder ?? -1) + 1),
@@ -11638,18 +11629,17 @@ export class PrismaApiStore {
     if (!item) throw new Error(`Rate schedule item ${itemId} not found`);
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: item.scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule not found`);
-    this.assertRevisionRateBookItemPatchIsSellSideOnly(schedule, patch);
-    if (patch.costRates !== undefined) {
-      throw badRequestError("Ratebook item costs come from the catalog item unit cost. Edit cost on Resources > Catalogue > Item.");
-    }
+
     this.assertRateBookItemCostFieldsAreClean(patch);
     const data: any = {};
     if (patch.rates !== undefined) data.rates = patch.rates;
+    if (patch.costRates !== undefined) data.costRates = patch.costRates;
     if (patch.burden !== undefined) data.burden = 0;
     if (patch.perDiem !== undefined) data.perDiem = 0;
     if (patch.metadata !== undefined) data.metadata = patch.metadata;
     if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
     await this.db.rateScheduleItem.update({ where: { id: itemId }, data });
+    if (schedule.projectId) await this.pushActivity(schedule.projectId, schedule.revisionId, "rate_item_rates_updated", { itemId, before: { rates: item.rates, costRates: item.costRates }, after: data });
     if (schedule.scope === "revision" && schedule.projectId) {
       if (schedule.revisionId) await this.repriceRevisionRateScheduleLines(schedule.revisionId);
       await this.syncProjectEstimate(schedule.projectId);
@@ -11689,6 +11679,8 @@ export class PrismaApiStore {
       return mapRateScheduleWithChildren(existing);
     }
 
+    const sourceMetadata = source.metadata as Record<string, unknown> | null;
+    const sourceCurrency = sourceMetadata?.currency ?? (await this.getOrganizationDefaults()).currency ?? null;
     const imported = await this.db.$transaction(async (tx) => {
       const newSchedId = createId("rs");
       const tierIdMap = new Map<string, string>();
@@ -11699,7 +11691,7 @@ export class PrismaApiStore {
           category: source.category, scope: "revision", projectId, revisionId: revision.id,
           sourceScheduleId: source.id, effectiveDate: source.effectiveDate, expiryDate: source.expiryDate,
           defaultMarkup: source.defaultMarkup, autoCalculate: source.autoCalculate,
-          metadata: source.metadata as any,
+          metadata: { ...sourceMetadata, currency: sourceCurrency } as any,
         },
       });
 
@@ -11721,7 +11713,7 @@ export class PrismaApiStore {
             id: createId("rsi"), scheduleId: newSchedId, catalogItemId: item.catalogItemId ?? null,
             resourceId: (item as any).resourceId ?? null,
             code: item.code, name: item.name, unit: item.unit,
-            rates: remappedRates, costRates: {},
+            rates: remappedRates, costRates: Object.fromEntries(Object.entries((item.costRates as Record<string, number>) ?? {}).map(([id, value]) => [tierIdMap.get(id) ?? id, value])),
             burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
           },
         });
@@ -12043,7 +12035,7 @@ export class PrismaApiStore {
               id: newItemId, scheduleId: newSchedId, catalogItemId: item.catalogItemId ?? null,
               resourceId: (item as any).resourceId ?? null,
               code: item.code, name: item.name, unit: item.unit,
-              rates: remappedRates, costRates: {},
+              rates: remappedRates, costRates: Object.fromEntries(Object.entries((item.costRates as Record<string, number>) ?? {}).map(([id, value]) => [tierIdMap.get(id) ?? id, value])),
               burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
             },
           });

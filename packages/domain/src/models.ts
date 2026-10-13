@@ -2270,6 +2270,8 @@ export interface RevisionTotals {
 }
 
 export interface ProjectWorkspace {
+  /** Quote display currency inherited from the organization; no FX conversion. */
+  quoteCurrency?: string;
   project: Project;
   sourceDocuments: SourceDocument[];
   quote: Quote;

@@ -66,7 +66,7 @@ export async function runReviewCycle(dir: string) {
     await symlink(join(dir, ".bidwright"), join(reviewDir, ".bidwright"), "dir").catch(error => { if (error.code !== "EEXIST") throw error; });
     const workspace = before.workspace;
     const brief = buildReviewClaudeMdContent({ ...config.brief, projectDir: reviewDir, advisoryReview: true, reviewOutput: "json",
-      laborBasis: workspace.laborBasis, pricingIntegrity: workspace.pricingIntegrity, unlinkedMeasurements: workspace.unlinkedMeasurements });
+      sourceOverview: await api(`/api/projects/${config.projectId}/source-overview`), laborBasis: workspace.laborBasis, pricingIntegrity: workspace.pricingIntegrity, unlinkedMeasurements: workspace.unlinkedMeasurements });
     for (const name of ["AGENTS.md", "CLAUDE.md"]) await writeFile(join(reviewDir, name), brief);
     await writeFile(join(reviewDir, "review-prompt.txt"), "Read the review instruction file. Independently spot-check this saved estimate against its sources using the seven review dimensions. Return your findings as JSON. No user is available. Benchmarks and calibration lessons are disabled. The estimate stays unchanged during this review.");
     if (await run("review", 600) !== 0) throw new Error("Independent review failed or timed out; saved build stands");

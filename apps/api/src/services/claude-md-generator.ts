@@ -182,7 +182,7 @@ function buildDrawingAnalysisSection(documents: ClaudeDocument[], mode: "estimat
 | Symbols/legends | extractDrawingLegend, createSymbolTemplateFromRegion | Repeated symbols in a defined region; optional how-to: pdf-takeoff |
 | Existing takeoff | listPickups, createWorksheetItem, updateWorksheetItem, linkPickupToWorksheetItem | Saved marks drive row quantities via takeoff: [{pickupId}]; updates replace the link set, omission preserves it |
 
-getSourceOverview refreshes Documents and Files facts mid-run. The launch snapshot is in \`.bidwright/source-overview.json\`. Missing metadata means unknown, not unavailable. All allowed tools are registered directly. \`describeTools({family:"sources"})\`, \`{family:"pricing"}\`, \`{family:"estimate"}\`, and \`{family:"reconciliation"}\` each return a whole phase of compact schemas in one call; a named lookup also includes its phase siblings. \`invokeTool\` accepts those same schemas. These capabilities support estimating judgment without prescribing a workflow.
+setRateScheduleItemRates records separate cost and sell rates/provenance on imported quote rate items, including rentals; source currency is shown separately from quote currency without conversion. countComponents lists schedule/legend types, tagged references and optional symbol clusters with counts, methods and confidence; overlapping methods remain separate. getSourceOverview reports delivered/unread pages and refreshes Documents and Files facts mid-run. The launch snapshot is in \`.bidwright/source-overview.json\`. Missing metadata means unknown, not unavailable. All allowed tools are registered directly. \`describeTools({family:"sources"})\`, \`{family:"pricing"}\`, \`{family:"estimate"}\`, and \`{family:"reconciliation"}\` each return a whole phase of compact schemas in one call; a named lookup also includes its phase siblings. \`invokeTool\` accepts those same schemas. These capabilities support estimating judgment without prescribing a workflow.
 
 Pickup person/agent/unrecorded counts reflect saved provenance labels. Legacy unrecorded pickups and UI CAD pickups labelled agent can include human work; inspect the existing takeoff rather than treating those labels as proof of who measured it.
 
@@ -608,6 +608,7 @@ Use getWorkspace/searchItems/getLineDerivation and original project sources for 
 Labour basis at launch: ${JSON.stringify(params.laborBasis ?? null)}
 Pricing integrity facts: ${JSON.stringify(params.pricingIntegrity ?? null)}
 Unlinked measurements: ${JSON.stringify(params.unlinkedMeasurements ?? null)}
+Document coverage: ${JSON.stringify((params.sourceOverview as any)?.documentCoverage ?? null)}
 ${agentPythonFacts(params.pythonEnvironment)}
 ${buildDrawingAnalysisSection(params.documents, "review")}
 ${buildDocumentManifestRows(params.documents, params.sourceOverview)}
@@ -639,6 +640,7 @@ ${buildLibrarySnapshotSection(params.librarySnapshot)}
 Labour basis at launch: ${JSON.stringify(params.laborBasis ?? null)}
 Pricing integrity facts: ${JSON.stringify(params.pricingIntegrity ?? null)}
 Unlinked measurements: ${JSON.stringify(params.unlinkedMeasurements ?? null)}
+Document coverage: ${JSON.stringify((params.sourceOverview as any)?.documentCoverage ?? null)}
 
 Use \`getWorkspace\` and \`searchItems\` for the saved rows, totals, conditions and labour units. \`getLineDerivation\` explains the recorded calculations. Quoted hours are available as resolved tier units (units.total / units.tiers) and worksheet labourHours; a row's quantity may instead be a multiplier. Read the quoted values before comparing them with your independent estimate.
 

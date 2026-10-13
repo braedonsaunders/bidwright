@@ -113,6 +113,7 @@ export function compactRateMap(map: unknown, tiers: RateTier[]): Record<string, 
 }
 
 export interface CompactRateItem {
+  currency: string;
   rateScheduleItemId: string;
   scheduleId: string;
   name: string | undefined;
@@ -134,6 +135,7 @@ export interface CompactRateItem {
 export function compactRateItem(item: Record<string, any>, schedule: Record<string, any>, options: { includeRates: boolean }): CompactRateItem {
   const tiers = scheduleTierList(schedule);
   const row: CompactRateItem = {
+    currency: String(schedule.metadata?.currency ?? "unknown"),
     rateScheduleItemId: String(item.id ?? ""),
     scheduleId: String(schedule.id ?? ""),
     name: clipText(item.name, 80),
@@ -164,6 +166,7 @@ export function shouldIncludeRates(input: { includeRates?: boolean | null; narro
 }
 
 export interface CompactScheduleSummary {
+  currency: string;
   id: string;
   name: string | undefined;
   category: string | undefined;
@@ -185,6 +188,7 @@ export function compactScheduleSummary(
   const items = Array.isArray(schedule?.items) ? schedule.items : [];
   const tiers = scheduleTierList(schedule);
   const summary: CompactScheduleSummary = {
+    currency: String(schedule.metadata?.currency ?? "unknown"),
     id: String(schedule.id ?? ""),
     name: clipText(schedule.name, 80),
     category: schedule.category ? String(schedule.category) : undefined,

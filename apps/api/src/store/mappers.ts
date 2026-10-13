@@ -82,7 +82,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     quoteType: "Firm",
     quoteNumberPattern: DEFAULT_QUOTE_NUMBER_PATTERN,
     timezone: "America/New_York",
-    currency: "USD",
+    currency: "unknown",
     dateFormat: "MM/DD/YYYY",
     fiscalYearStart: 1,
     maxAgentIterations: 200,

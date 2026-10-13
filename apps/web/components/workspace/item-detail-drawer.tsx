@@ -749,7 +749,7 @@ export function ItemDetailDrawer({
           </TabsContent>
 
           <TabsContent value="pricing" className="mt-0">
-            <CostStackTab item={item} rateResolution={rateResolution} />
+            <CostStackTab item={item} rateResolution={rateResolution} quoteCurrency={workspace.quoteCurrency} />
           </TabsContent>
 
           {showPluginTab && (
@@ -803,9 +803,11 @@ function componentTone(target: string) {
 function CostStackTab({
   item,
   rateResolution,
+  quoteCurrency,
 }: {
   item: WorkspaceWorksheetItem;
   rateResolution: WorkspaceWorksheetItem["rateResolution"];
+  quoteCurrency?: string;
 }) {
   if (!rateResolution || rateResolution.components.length === 0) {
     return (
@@ -840,7 +842,8 @@ function CostStackTab({
             <div className="text-sm font-semibold text-fg">{rateResolution.rateBookName ?? "Rate book"}</div>
             <div className="mt-0.5 truncate text-xs text-fg/50">{rateResolution.rateBookItemName ?? item.entityName}</div>
           </div>
-          <Badge tone="info">{rateResolution.currency ?? "USD"}</Badge>
+          <Badge tone="info">Source: {rateResolution.currency ?? "unknown"}</Badge>
+          {(!quoteCurrency || !rateResolution.currency || rateResolution.currency === "unknown" || quoteCurrency !== rateResolution.currency) && <div className="text-xs text-fg/60">Quote: {quoteCurrency || "unknown"}. Source currency differs or is unknown; no conversion applied.</div>}
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2">
           <MetricTile label="Total Cost" value={formatMoney(rateResolution.totalCost, 2)} />

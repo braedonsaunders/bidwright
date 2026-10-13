@@ -1076,6 +1076,7 @@ export interface ApprovedCalibrationLesson extends CalibrationLesson {
 }
 
 export interface ProjectWorkspaceData {
+  quoteCurrency?: string;
   project: ProjectListItem;
   sourceDocuments: SourceDocument[];
   quote: ProjectListItem["quote"] & {

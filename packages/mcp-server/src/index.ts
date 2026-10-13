@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { registerComponentTools } from "./tools/component-tools.js";
 import { compactToolSchema, toolDiscoveryPhase } from "./tool-discovery.js";
 /**
  * Bidwright MCP Server
@@ -104,6 +105,7 @@ export async function registerTools(server: McpServer, options: { mode?: string;
   registerCalculatorTools(server);
   registerWebTools(server);
   registerSourceTools(server);
+  registerComponentTools(server);
 
   registerTakeoffTools(server);
   registerCadTools(server);

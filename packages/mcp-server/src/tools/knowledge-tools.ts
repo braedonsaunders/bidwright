@@ -1,3 +1,4 @@
+import { recordSourceRead, selectedPages } from "../source-read.js";
 import { laborOperationQueries } from "@bidwright/domain";
 import { sourceQuantityTakeoffHint } from "../takeoff-hints.js";
 import { promoteSourceDocumentId, resolveSourceDocumentId } from "../source-document.js";
@@ -683,6 +684,7 @@ export function registerKnowledgeTools(server: McpServer) {
       }
 
       if (!doc.bookName && !doc.documentTitle && doc.sourceType !== "knowledge_document") {
+        output += await recordSourceRead({ documentId, tool: "readDocumentText", pages: doc.textPages ?? selectedPages(pages), offset: chunk.offset, returnedChars: chunk.text.length, totalChars: chunk.totalChars, truncated: chunk.hasMore, checksum: doc.checksum });
         output += `\n\n${sourceQuantityTakeoffHint(documentId)}`;
       }
       return { content: [{ type: "text" as const, text: output }] };
@@ -694,10 +696,12 @@ export function registerKnowledgeTools(server: McpServer) {
     "Get the Azure Document Intelligence structured extraction for a project source document: tables (as markdown), key-value pairs, section headings, and page-by-page text. For knowledge books, use readDocumentText and getBookPage instead.",
     {
       documentId: z.string().describe("SourceDocument or FileNode ID"),
+      tableOffset: z.coerce.number().int().min(0).default(0).describe("First table index; use with maxTables=1 to continue a table."),
+      charOffset: z.coerce.number().int().min(0).default(0).describe("Character offset within returned tables."),
       maxTables: z.coerce.number().int().positive().max(20).default(5),
       maxTableChars: z.coerce.number().int().positive().max(12000).default(3000),
     },
-    async ({ documentId, maxTables, maxTableChars }) => {
+    async ({ documentId, maxTables, maxTableChars, tableOffset, charOffset }) => {
       documentId = await resolveSourceDocumentId(documentId);
       const data = await apiGet(`/api/knowledge/documents/${getProjectId()}/${documentId}`);
       // Return structured data if available
@@ -711,9 +715,9 @@ export function registerKnowledgeTools(server: McpServer) {
       if (doc.structuredData) {
         const tables = Array.isArray(doc.structuredData.tables) ? doc.structuredData.tables : [];
         result.tableCount = tables.length;
-        result.tables = tables.slice(0, maxTables).map((table: any) => {
+        result.tables = tables.slice(tableOffset, tableOffset + maxTables).map((table: any) => {
           const markdown = typeof table.markdown === "string" ? table.markdown : "";
-          const chunk = truncateText(markdown, maxTableChars, 0);
+          const chunk = truncateText(markdown, maxTableChars, charOffset);
           return {
             pageNumber: table.pageNumber ?? table.page,
             rowCount: table.rowCount ?? table.rows,
@@ -722,11 +726,17 @@ export function registerKnowledgeTools(server: McpServer) {
             markdown: chunk.text,
             truncated: chunk.hasMore,
             totalMarkdownChars: chunk.totalChars,
+            nextOffset: chunk.hasMore ? chunk.offset + chunk.text.length : null,
           };
         });
         result.keyValuePairs = Array.isArray(doc.structuredData.keyValuePairs)
           ? doc.structuredData.keyValuePairs.slice(0, 100)
           : doc.structuredData.keyValuePairs;
+      }
+      result.continuation = "getDocumentStructured({documentId,tableOffset:<table index>,maxTables:1,charOffset:<nextOffset>}) continues a table; increase tableOffset for later tables.";
+      result.coverageTelemetry = [];
+      for (const [index, table] of (result.tables ?? []).entries()) {
+        result.coverageTelemetry.push(await recordSourceRead({ documentId, tool: "getDocumentStructured", pages: table.pageNumber ? [table.pageNumber] : undefined, section: `table:${tableOffset + index}`, offset: charOffset, returnedChars: table.markdown.length, totalChars: table.totalMarkdownChars, truncated: table.truncated, checksum: doc.checksum }));
       }
       // Include section headings from chunks if available
       if (doc.chunks) {
@@ -766,7 +776,8 @@ export function registerKnowledgeTools(server: McpServer) {
         const suffix = chunk.hasMore
           ? `\n\n[TRUNCATED: returned ${chunk.text.length} of ${chunk.totalChars} chars from offset ${chunk.offset}. Call readSpreadsheet again with offset=${chunk.offset + chunk.text.length} and the same sheet/maxChars to continue, or use sheet to narrow.]`
           : "";
-        return { content: [{ type: "text" as const, text: chunk.text + suffix + `\n\n${sourceQuantityTakeoffHint(documentId, [{ sheet: sheet ?? result.sheets[0]?.name ?? "<sheet>", row: 1 }])}` }] };
+        const coverage = await recordSourceRead({ documentId, tool: "readSpreadsheet", section: sheet ?? "all sheets", offset: chunk.offset, returnedChars: chunk.text.length, totalChars: chunk.totalChars, truncated: chunk.hasMore, checksum: result.checksum });
+        return { content: [{ type: "text" as const, text: chunk.text + suffix + coverage + `\n\n${sourceQuantityTakeoffHint(documentId, [{ sheet: sheet ?? result.sheets[0]?.name ?? "<sheet>", row: 1 }])}` }] };
       } catch (err: any) {
         return {
           content: [{ type: "text" as const, text: `ERROR reading spreadsheet: ${err?.message || String(err)}. This may not be a spreadsheet file, or the document ID may be wrong. Check the document manifest for the correct ID.` }],

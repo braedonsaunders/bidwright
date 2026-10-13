@@ -6,6 +6,7 @@ export function registerReviewTools(server: McpServer) {
   server.tool("requestEstimateReview", "Optional fresh-context advisory review of the current draft: quantity spot-checks, document scope coverage, traceability, labour basis, pricing integrity and commercial clarity. Starts a separate review (up to ten minutes; at most two per estimating run), leaving estimate rows unchanged. Returns a reviewId; poll with that id to read findings without launching another review. The estimator can revise after reading the findings; completion never depends on this review.", {
     reviewId: z.string().optional().describe("Poll the returned review id; omit only to request a new review."),
   }, async ({ reviewId }) => {
+    if (process.env.BIDWRIGHT_REVIEW_OWNER === "harness") return { content: [{ type: "text" as const, text: JSON.stringify({ status: "scheduled_locally", fact: "This harness runs a fresh-context local review after the build, followed by one revision. No server review was started." }) }] };
     if (!reviewId) return { content: [{ type: "text" as const, text: JSON.stringify(await apiPost(`/api/review/${getProjectId()}/start`, { advisory: true })) }] };
     const { review } = await apiGet(`/api/review/${getProjectId()}/latest?reviewId=${encodeURIComponent(reviewId)}`);
     return { content: [{ type: "text" as const, text: JSON.stringify(review?.id === reviewId

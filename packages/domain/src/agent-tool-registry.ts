@@ -22,6 +22,8 @@ export interface AgentToolDefinition {
 }
 
 export const AGENT_TOOL_REGISTRY = {
+  setRateScheduleItemRates: { id: "setRateScheduleItemRates", displayName: "Set quote rate cost and sell", category: "resources", mutates: true },
+  countComponents: { id: "countComponents", displayName: "Count source components", category: "vision", mutates: false },
   getSourceOverview: { id: "getSourceOverview", displayName: "Read source overview", category: "documents", mutates: false },
   getTakeoffCalibration: { id: "getTakeoffCalibration", displayName: "getTakeoffCalibration", category: "vision", mutates: false },
   setTakeoffCalibration: { id: "setTakeoffCalibration", displayName: "setTakeoffCalibration", category: "vision", mutates: true },

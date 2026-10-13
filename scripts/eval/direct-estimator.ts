@@ -252,6 +252,7 @@ exec '${tsx}' '${mcpEntry}'
           BIDWRIGHT_REVISION_ID: revision.id ?? "",
           BIDWRIGHT_QUOTE_ID: quote.id ?? "",
           BIDWRIGHT_AGENT_MODE: "build_estimate",
+          BIDWRIGHT_REVIEW_OWNER: "harness",
         },
       },
     },

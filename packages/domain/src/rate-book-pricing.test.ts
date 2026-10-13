@@ -266,3 +266,17 @@ test("rate book cost uses generic tier multipliers and schedule-level components
     ],
   );
 });
+
+test("electrical and finishes equipment retain separate cost/sell currency and duration rates", () => {
+  for (const name of ["Cable puller", "Finishes access lift"]) {
+    const equipment = { ...category, name: "Access", entityType: "Access", calculationType: "duration_rate" as const };
+    const item = worksheetItem({ category: "Access", entityType: "Access", entityName: name, rateScheduleItemId: "rental", quantity: 2, uom: "WK", tierUnits: { week: 3 } });
+    const book = { id: "book", category: "Access", metadata: { currency: "USD" }, tiers: [{ id: "week", uom: "WK", multiplier: 1 }], items: [{ id: "rental", name, costRates: { week: 100 }, rates: { week: 130 }, metadata: { costProvenance: { basis: "supplier quote" }, sellProvenance: { basis: "authored" } } }] };
+    const result = resolveRateBookLine(item, equipment, { currency: "CAD", rateBooks: [book] })!;
+    assert.equal(result.snapshot.currency, "USD", "quote currency does not relabel source rates");
+    assert.equal(result.snapshot.totalCost, 600); assert.equal(result.price, 780);
+    assert.deepEqual(result.snapshot.components.find(c => c.target === "cost")?.metadata?.provenance, { basis: "supplier quote" });
+    const unknown = resolveRateBookLine(item, equipment, { currency: "CAD", rateBooks: [{ ...book, metadata: {} }] })!;
+    assert.equal(unknown.snapshot.currency, "unknown");
+  }
+});

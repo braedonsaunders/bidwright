@@ -264,6 +264,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
           id: doc.id,
           fileName: doc.fileName,
           fileType: doc.fileType,
+          checksum: doc.checksum,
           documentType: doc.documentType,
           pageCount: doc.pageCount,
           hasExtractedText: !!doc.extractedText,
@@ -660,6 +661,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
 
       return {
         fileName,
+        checksum: sourceDoc?.checksum ?? undefined,
         sheetCount: sheetNames.length,
         allSheetNames: sheetNames,
         sheets,

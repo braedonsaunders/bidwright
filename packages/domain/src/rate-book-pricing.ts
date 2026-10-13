@@ -288,7 +288,10 @@ export function resolveRateBookLine(
     const priceKey = resolveTierId(rawTierId, validRateKeys);
     const fallbackKey = defaultTier?.id ?? "";
     const unitPrice = numberValue(rates[priceKey] ?? rates[fallbackKey], Number.NaN);
-    const unitCost = Number.isFinite(catalogUnitCost) ? money(catalogUnitCost * tierMultiplier(tier)) : Number.NaN;
+    const costRates = rateBookItem.costRates ?? {};
+    const costKey = resolveTierId(rawTierId, Object.keys(costRates));
+    const explicitCost = costRates[costKey] ?? costRates[fallbackKey];
+    const unitCost = explicitCost !== undefined ? numberValue(explicitCost, Number.NaN) : Number.isFinite(catalogUnitCost) ? money(catalogUnitCost * tierMultiplier(tier)) : Number.NaN;
     const extendedUnits = units * quantity;
 
     if (!Number.isFinite(unitPrice)) {
@@ -311,12 +314,12 @@ export function resolveRateBookLine(
         rateBookId: rateBook.id,
         rateBookItemId: rateBookItem.id,
         tierId: tier?.id ?? rawTierId,
-        metadata: {},
+        metadata: { basis: "rate-book sell", provenance: rateBookItem.metadata?.sellProvenance ?? null },
       }));
     }
 
     if (!Number.isFinite(unitCost)) {
-      warnings.push(`Missing catalog item cost for ${rateBookItem.name ?? item.entityName}.`);
+      warnings.push(`Missing explicit rate or catalog item cost for ${rateBookItem.name ?? item.entityName}.`);
     } else {
       const amount = unitCost * extendedUnits;
       totalCost += amount;
@@ -335,7 +338,7 @@ export function resolveRateBookLine(
         rateBookId: rateBook.id,
         rateBookItemId: rateBookItem.id,
         tierId: tier?.id ?? rawTierId,
-        metadata: {},
+        metadata: { basis: explicitCost !== undefined ? "authored cost rate" : "catalog unit cost", provenance: rateBookItem.metadata?.costProvenance ?? null },
       }));
     }
 
@@ -444,7 +447,7 @@ export function resolveRateBookLine(
       rateBookItemName: rateBookItem.name ?? item.entityName,
       resourceId: rateBookItem.resourceId ?? item.costResourceId ?? null,
       catalogItemId: rateBookItem.catalogItemId ?? item.itemId ?? null,
-      currency: context.currency ?? String(rateBook.metadata?.currency ?? "USD"),
+      currency: typeof rateBook.metadata?.currency === "string" && /^[A-Z]{3}$/i.test(rateBook.metadata.currency) ? rateBook.metadata.currency.toUpperCase() : "unknown",
       region: context.region ?? (typeof rateBook.metadata?.region === "string" ? rateBook.metadata.region : undefined),
       quantity,
       uom: item.uom,

@@ -33,5 +33,5 @@ export async function documentPageText(doc: any, requested: string, pdfPath?: st
   }
   const missing = Array.from({ length: end - start + 1 }, (_, i) => start + i).filter(page => !indexed.has(page));
   if (missing.length) return { content: "", pageTextStatus: "unavailable", fact: `Page-indexed text is unavailable for pages ${missing.join(", ")}; this does not mean the document has no text. readDrawingPage can inspect these pages.` };
-  return { content: Array.from({ length: end - start + 1 }, (_, i) => `--- Page ${start + i} ---\n${indexed.get(start + i) || "[No text layer on this page; readDrawingPage can inspect it.]"}`).join("\n\n"), pageTextStatus: "available" };
+  return { textPages: Array.from({ length: end-start+1 }, (_, i) => start+i).filter(p => !!indexed.get(p)?.trim()), content: Array.from({ length: end - start + 1 }, (_, i) => `--- Page ${start + i} ---\n${indexed.get(start + i) || "[No text layer on this page; readDrawingPage can inspect it.]"}`).join("\n\n"), pageTextStatus: "available" };
 }
