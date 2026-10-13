@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { laborOperationQueries, laborUnitPresentation, summarizeLaborBasis, validateLineDerivation } from "@bidwright/domain";
+import { readFileSync } from "node:fs";
+import { laborOperationQueries, laborUnitPresentation, summarizeLaborBasis, validateLineDerivation, normalizeLineDerivation } from "@bidwright/domain";
 import { laborUnitConversion, matchLaborBreakdown } from "./labor-unit-matching.js";
 import { buildLaborUnitDerivation } from "./labor-unit-derivation.js";
 import { buildEstimatorSearchProfile } from "./estimator-search.js";
@@ -49,13 +50,13 @@ test("batch matching shares duplicate searches, caps concurrency, and reports we
   assert.equal(laborUnitConversion("EA", "ft").multiplier, null);
 });
 
-test("matched row derivation records extended hours and separates rate pricing from productivity", () => {
+test("matched row derivation records per-unit hours and separates rate pricing from productivity", () => {
   const item: any = { id: "row", description: "Weld", quantity: 10, uom: "FT", category: "Labour", rateScheduleItemId: "rate", tierUnits: { regular: .3 }, laborUnitId: "unit" };
   const unit = { id: "unit", name: "Weld", hoursNormal: .2, outputUom: "FT" };
   item.derivation = buildLaborUnitDerivation(item, unit);
-  assert.equal(item.derivation.result.value, 3);
+  assert.equal(item.derivation.result.value, .3);
   assert.ok(Math.abs(item.derivation.inputs.find((input: any) => input.name === "factor").value - 1.5) < 1e-10);
-  assert.deepEqual(validateLineDerivation(item.derivation, { expectedValue: 3 }).filter(issue => issue.severity === "error"), []);
+  assert.deepEqual(validateLineDerivation(item.derivation, { expectedValue: .3 }).filter(issue => issue.severity === "error"), []);
   assert.equal(buildLaborUnitDerivation({ ...item, uom: "LS" }, unit), null);
   const ws: any = { worksheets: [{ items: [item, { ...item, id: "assumed", laborUnitId: null }] }],
     entityCategories: [{ id: "labor", name: "Labour", entityType: "Labour", analyticsBucket: "labour", calculationType: "rate_schedule" }],
@@ -106,8 +107,23 @@ test("ordinary row creation persists matched productivity and a derivation witho
   assert.equal(saved.length, 1);
   assert.equal(saved[0].laborUnitId, "unit");
   assert.deepEqual(saved[0].tierUnits, { regular: .2 });
-  assert.equal(saved[0].derivation.result.value, 2);
+  assert.equal(saved[0].derivation.result.value, .2);
   assert.equal(saved[0].derivation.inputs.find((input: any) => input.name === "hoursNormal").source.ref, "unit");
+  // The batch route uses the same transaction-bound persistence method as a single create.
+  schedule.tiers[0].uom = "HR";
+  db.$transaction = async (run: any) => run(db);
+  const operations = JSON.parse(readFileSync(new URL("../../../../packages/domain/src/__fixtures__/labor-per-unit-batch.json", import.meta.url), "utf8"));
+  const batch = await store.batchWorksheetItemMutations("project", operations);
+  assert.equal(batch.results.length, 5);
+  for (const [index, operation] of operations.entries()) {
+    const stored = saved[index + 1];
+    assert.equal(stored.laborUnitId, operation.item.laborUnitId);
+    assert.deepEqual(stored.tierUnits, operation.item.tierUnits);
+    assert.equal(stored.derivation.formula, operation.item.derivation.formula);
+    assert.deepEqual(stored.derivation.inputs, normalizeLineDerivation(operation.item.derivation)!.inputs);
+    assert.deepEqual(stored.derivation.result, operation.item.derivation.result);
+  }
+
 });
 
 

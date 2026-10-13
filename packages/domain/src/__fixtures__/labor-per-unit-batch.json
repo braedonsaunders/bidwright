@@ -1,0 +1,347 @@
+[
+  {
+    "op": "create",
+    "ref": "SS65weld",
+    "worksheetId": "sheet",
+    "item": {
+      "entityName": "Trade Labour",
+      "category": "Labour",
+      "quantity": 72,
+      "uom": "WELD",
+      "rateScheduleItemId": "rate",
+      "laborUnitId": "lu-plugin-shop-pipe-2-1-2-butt-weld-stainless",
+      "tierUnits": {
+        "regular": 1.24191125
+      },
+      "description": "Shop arc welding 65mm 316L mixed Sch10S above/Sch40S buried; 72 provisional welds. Quantity multiplier is WELD count, not crew size; tierUnits are person-hours/WELD.",
+      "derivation": {
+        "target": "tierUnits",
+        "formula": "baseline * factor",
+        "inputs": [
+          {
+            "name": "baseline",
+            "value": 0.993529,
+            "unit": "HR/WELD",
+            "source": {
+              "kind": "laborUnit",
+              "ref": "lu-plugin-shop-pipe-2-1-2-butt-weld-stainless"
+            }
+          },
+          {
+            "name": "factor",
+            "value": 1.25,
+            "source": {
+              "kind": "assumption",
+              "ref": "A03"
+            },
+            "note": "25% welding adjustment for SS backpurge quality; thin-wall weld parameters to be validated."
+          }
+        ],
+        "result": {
+          "value": 1.24191125,
+          "unit": "HR/WELD"
+        },
+        "status": "reviewed",
+        "notes": "Plugin baseline is arc welding only, schedule-agnostic and weak source quality. Prep/purge setup excluded here; priced separately. No heat treatment required assumed."
+      },
+      "evidenceBasis": {
+        "quantity": {
+          "type": "mixed",
+          "sourceRefs": [
+            "lu-plugin-shop-pipe-2-1-2-butt-weld-stainless"
+          ],
+          "assumptionIds": [
+            "A03"
+          ],
+          "quantityDriver": "72 welds times adjusted source hours"
+        },
+        "pricing": {
+          "type": "rate_schedule",
+          "sourceRefs": [
+            "rate"
+          ],
+          "assumptionIds": [
+            "A06"
+          ]
+        }
+      },
+      "sourceNotes": "Plugin Shop Pipe Fabrication unit, operation welding only. Joint quantities are allowance A03. Shop is inherently more productive; field uses 1.25 uplift separately."
+    }
+  },
+  {
+    "op": "create",
+    "ref": "SS50weld",
+    "worksheetId": "sheet",
+    "item": {
+      "entityName": "Trade Labour",
+      "category": "Labour",
+      "quantity": 16,
+      "uom": "WELD",
+      "rateScheduleItemId": "rate",
+      "laborUnitId": "lu-plugin-shop-pipe-2-butt-weld-stainless",
+      "tierUnits": {
+        "regular": 0.68395125
+      },
+      "description": "Shop arc welding 50mm 316L Sch10S; 16 provisional welds. Quantity multiplier is WELD count, not crew size; tierUnits are person-hours/WELD.",
+      "derivation": {
+        "target": "tierUnits",
+        "formula": "baseline * factor",
+        "inputs": [
+          {
+            "name": "baseline",
+            "value": 0.547161,
+            "unit": "HR/WELD",
+            "source": {
+              "kind": "laborUnit",
+              "ref": "lu-plugin-shop-pipe-2-butt-weld-stainless"
+            }
+          },
+          {
+            "name": "factor",
+            "value": 1.25,
+            "source": {
+              "kind": "assumption",
+              "ref": "A03"
+            },
+            "note": "25% welding adjustment for SS backpurge quality; thin-wall weld parameters to be validated."
+          }
+        ],
+        "result": {
+          "value": 0.68395125,
+          "unit": "HR/WELD"
+        },
+        "status": "reviewed",
+        "notes": "Plugin baseline is arc welding only, schedule-agnostic and weak source quality. Prep/purge setup excluded here; priced separately. No heat treatment required assumed."
+      },
+      "evidenceBasis": {
+        "quantity": {
+          "type": "mixed",
+          "sourceRefs": [
+            "lu-plugin-shop-pipe-2-butt-weld-stainless"
+          ],
+          "assumptionIds": [
+            "A03"
+          ],
+          "quantityDriver": "16 welds times adjusted source hours"
+        },
+        "pricing": {
+          "type": "rate_schedule",
+          "sourceRefs": [
+            "rate"
+          ],
+          "assumptionIds": [
+            "A06"
+          ]
+        }
+      },
+      "sourceNotes": "Plugin Shop Pipe Fabrication unit, operation welding only. Joint quantities are allowance A03. Shop is inherently more productive; field uses 1.25 uplift separately."
+    }
+  },
+  {
+    "op": "create",
+    "ref": "CS65weld",
+    "worksheetId": "sheet",
+    "item": {
+      "entityName": "Trade Labour",
+      "category": "Labour",
+      "quantity": 72,
+      "uom": "WELD",
+      "rateScheduleItemId": "rate",
+      "laborUnitId": "lu-plugin-shop-pipe-2-1-2-butt-weld-carbon",
+      "tierUnits": {
+        "regular": 0.903208
+      },
+      "description": "Shop arc welding 65mm CS Sch40; 72 provisional welds. Quantity multiplier is WELD count, not crew size; tierUnits are person-hours/WELD.",
+      "derivation": {
+        "target": "tierUnits",
+        "formula": "baseline * factor",
+        "inputs": [
+          {
+            "name": "baseline",
+            "value": 0.903208,
+            "unit": "HR/WELD",
+            "source": {
+              "kind": "laborUnit",
+              "ref": "lu-plugin-shop-pipe-2-1-2-butt-weld-carbon"
+            }
+          },
+          {
+            "name": "factor",
+            "value": 1,
+            "source": {
+              "kind": "assumption",
+              "ref": "A03"
+            },
+            "note": "Shop baseline; no duplicate shop productivity discount."
+          }
+        ],
+        "result": {
+          "value": 0.903208,
+          "unit": "HR/WELD"
+        },
+        "status": "reviewed",
+        "notes": "Plugin baseline is arc welding only, schedule-agnostic and weak source quality. Prep/purge setup excluded here; priced separately. No heat treatment required assumed."
+      },
+      "evidenceBasis": {
+        "quantity": {
+          "type": "mixed",
+          "sourceRefs": [
+            "lu-plugin-shop-pipe-2-1-2-butt-weld-carbon"
+          ],
+          "assumptionIds": [
+            "A03"
+          ],
+          "quantityDriver": "72 welds times adjusted source hours"
+        },
+        "pricing": {
+          "type": "rate_schedule",
+          "sourceRefs": [
+            "rate"
+          ],
+          "assumptionIds": [
+            "A06"
+          ]
+        }
+      },
+      "sourceNotes": "Plugin Shop Pipe Fabrication unit, operation welding only. Joint quantities are allowance A03. Shop is inherently more productive; field uses 1.25 uplift separately."
+    }
+  },
+  {
+    "op": "create",
+    "ref": "CS75weld",
+    "worksheetId": "sheet",
+    "item": {
+      "entityName": "Trade Labour",
+      "category": "Labour",
+      "quantity": 8,
+      "uom": "WELD",
+      "rateScheduleItemId": "rate",
+      "laborUnitId": "lu-plugin-shop-pipe-3-butt-weld-carbon",
+      "tierUnits": {
+        "regular": 1.099557
+      },
+      "description": "Shop arc welding 75mm CS Sch40; 8 provisional welds. Quantity multiplier is WELD count, not crew size; tierUnits are person-hours/WELD.",
+      "derivation": {
+        "target": "tierUnits",
+        "formula": "baseline * factor",
+        "inputs": [
+          {
+            "name": "baseline",
+            "value": 1.099557,
+            "unit": "HR/WELD",
+            "source": {
+              "kind": "laborUnit",
+              "ref": "lu-plugin-shop-pipe-3-butt-weld-carbon"
+            }
+          },
+          {
+            "name": "factor",
+            "value": 1,
+            "source": {
+              "kind": "assumption",
+              "ref": "A03"
+            },
+            "note": "Shop baseline; no duplicate shop productivity discount."
+          }
+        ],
+        "result": {
+          "value": 1.099557,
+          "unit": "HR/WELD"
+        },
+        "status": "reviewed",
+        "notes": "Plugin baseline is arc welding only, schedule-agnostic and weak source quality. Prep/purge setup excluded here; priced separately. No heat treatment required assumed."
+      },
+      "evidenceBasis": {
+        "quantity": {
+          "type": "mixed",
+          "sourceRefs": [
+            "lu-plugin-shop-pipe-3-butt-weld-carbon"
+          ],
+          "assumptionIds": [
+            "A03"
+          ],
+          "quantityDriver": "8 welds times adjusted source hours"
+        },
+        "pricing": {
+          "type": "rate_schedule",
+          "sourceRefs": [
+            "rate"
+          ],
+          "assumptionIds": [
+            "A06"
+          ]
+        }
+      },
+      "sourceNotes": "Plugin Shop Pipe Fabrication unit, operation welding only. Joint quantities are allowance A03. Shop is inherently more productive; field uses 1.25 uplift separately."
+    }
+  },
+  {
+    "op": "create",
+    "ref": "CS150weld",
+    "worksheetId": "sheet",
+    "item": {
+      "entityName": "Trade Labour",
+      "category": "Labour",
+      "quantity": 6,
+      "uom": "WELD",
+      "rateScheduleItemId": "rate",
+      "laborUnitId": "lu-plugin-shop-pipe-6-butt-weld-carbon",
+      "tierUnits": {
+        "regular": 1.560979
+      },
+      "description": "Shop arc welding 150mm CS Sch40; 6 provisional welds. Quantity multiplier is WELD count, not crew size; tierUnits are person-hours/WELD.",
+      "derivation": {
+        "target": "tierUnits",
+        "formula": "baseline * factor",
+        "inputs": [
+          {
+            "name": "baseline",
+            "value": 1.560979,
+            "unit": "HR/WELD",
+            "source": {
+              "kind": "laborUnit",
+              "ref": "lu-plugin-shop-pipe-6-butt-weld-carbon"
+            }
+          },
+          {
+            "name": "factor",
+            "value": 1,
+            "source": {
+              "kind": "assumption",
+              "ref": "A03"
+            },
+            "note": "Shop baseline; no duplicate shop productivity discount."
+          }
+        ],
+        "result": {
+          "value": 1.560979,
+          "unit": "HR/WELD"
+        },
+        "status": "reviewed",
+        "notes": "Plugin baseline is arc welding only, schedule-agnostic and weak source quality. Prep/purge setup excluded here; priced separately. No heat treatment required assumed."
+      },
+      "evidenceBasis": {
+        "quantity": {
+          "type": "mixed",
+          "sourceRefs": [
+            "lu-plugin-shop-pipe-6-butt-weld-carbon"
+          ],
+          "assumptionIds": [
+            "A03"
+          ],
+          "quantityDriver": "6 welds times adjusted source hours"
+        },
+        "pricing": {
+          "type": "rate_schedule",
+          "sourceRefs": [
+            "rate"
+          ],
+          "assumptionIds": [
+            "A06"
+          ]
+        }
+      },
+      "sourceNotes": "Plugin Shop Pipe Fabrication unit, operation welding only. Joint quantities are allowance A03. Shop is inherently more productive; field uses 1.25 uplift separately."
+    }
+  }
+]

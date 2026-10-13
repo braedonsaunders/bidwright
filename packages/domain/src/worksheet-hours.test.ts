@@ -262,3 +262,9 @@ test("authored ratebook tiers sort ahead of unresolved alias tiers", () => {
   );
   assert.deepEqual(breakdown.tiers.map((tier) => tier.name), ["Daily", "Double Time"]);
 });
+
+test("extended hours retain per-weld precision until after quantity multiplication", () => {
+  const breakdown = getExtendedWorksheetHourBreakdown({ tierUnits: { regular: 1.24191125 } }, [], 72);
+  assert.equal(breakdown.total, 89.42);
+  assert.equal(breakdown.tiers[0].hours, 89.42);
+});

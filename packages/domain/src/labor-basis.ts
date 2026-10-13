@@ -1,5 +1,5 @@
 import { rollupWorksheetUnits } from "./worksheet-hours";
-import { normalizeLineDerivation, validateLineDerivation } from "./line-derivation";
+import { normalizeLineDerivation, validateLineDerivation, lineDerivationExpectedValue, formulaIdentifiers, uomsEquivalent } from "./line-derivation";
 
 /** A rate-card price is not a productivity source; only a current, reproducible unit derivation qualifies. */
 export function summarizeLaborBasis(workspace: any) {
@@ -10,16 +10,26 @@ export function summarizeLaborBasis(workspace: any) {
     const hours = rollupWorksheetUnits([item], workspace.rateSchedules ?? [], workspace.entityCategories ?? []).labourHours.total;
     if (!hours) continue;
     const derivation = normalizeLineDerivation(item.derivation);
-    const expected = derivation?.target === "tierUnits" ? Object.values(item.tierUnits ?? {}).reduce<number>((sum, value) => sum + Number(value || 0), 0) * Number(item.quantity ?? 1) : Number(item.quantity ?? 1);
+    const expected = derivation ? lineDerivationExpectedValue(derivation.target, item) : null;
     const reproducible = item.laborUnitId && derivation && derivation.status !== "stale"
       && ["tierUnits", "quantity"].includes(derivation.target)
       && derivation.inputs.some((input) => input.source.kind === "laborUnit" && input.source.ref === item.laborUnitId)
       && !validateLineDerivation(derivation, { expectedValue: expected }).some((issue) => issue.severity === "error");
     // Compare actual hours with the source baseline, rather than accepting an arbitrary authored factor.
-    const normal = derivation?.inputs.find(input => input.name === "hoursNormal" && input.source.kind === "laborUnit" && input.source.ref === item.laborUnitId)?.value;
-    const conversion = derivation?.inputs.find(input => input.name === "conversion")?.value ?? 1;
-    const baseline = Number(item.quantity) * Number(normal) * conversion;
-    const factor = baseline > 0 ? hours / baseline : NaN;
+    const used = new Set(formulaIdentifiers(derivation?.formula ?? ""));
+    const sources = derivation?.inputs.filter(input => used.has(input.name) && input.source.kind === "laborUnit" && input.source.ref === item.laborUnitId && input.value > 0) ?? [];
+    // Source identity and units matter, not the agent's variable name (baseline, hoursNormal, ...).
+    const source = sources.length === 1 ? sources[0] : undefined;
+    const outputUom = source?.unit?.match(/^(?:h|hr|hrs|hours?)\s*\/\s*(.+)$/i)?.[1];
+    const conversion = derivation?.inputs.find(input => used.has(input.name) && input.name === "conversion")?.value ?? 1;
+    const counts = outputUom ? derivation?.inputs.filter(input => used.has(input.name) && input !== source && input.unit && uomsEquivalent(input.unit, outputUom)) ?? [] : [];
+    // Total-hours rows can carry the installed count inside the formula: joints × baseline × factor.
+    // Otherwise a per-unit trace uses the priced row's installed quantity (and explicit conversion).
+    const count = counts.length === 1 ? counts[0].value * (derivation?.target === "tierUnits" ? Number(item.quantity ?? 1) : 1)
+      : derivation?.target === "tierUnits" && (conversion !== 1 || (outputUom && item.uom && uomsEquivalent(item.uom, outputUom))) ? Number(item.quantity ?? 1) * conversion : NaN;
+    const baseline = count * Number(source?.value);
+    const authoredHours = Number(lineDerivationExpectedValue("tierUnits", item)) * Number(item.quantity ?? 1);
+    const factor = baseline > 0 ? authoredHours / baseline : NaN;
     if (reproducible && Number.isFinite(factor) && factor > 0 && Math.abs(factor - 1) <= .100000001) sourcedHours += hours;
     else if (reproducible && Number.isFinite(factor) && factor > 0) {
       adjustedHours += hours;

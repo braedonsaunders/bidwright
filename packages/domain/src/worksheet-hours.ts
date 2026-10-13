@@ -216,7 +216,7 @@ function compareTiers(
   return toNumber(a.multiplier) - toNumber(b.multiplier);
 }
 
-export function getWorksheetHourBreakdown(
+function getRawWorksheetHourBreakdown(
   item: WorksheetHourItemLike,
   schedules: WorksheetHourRateScheduleLike[],
 ): WorksheetHourBreakdown {
@@ -253,7 +253,7 @@ export function getWorksheetHourBreakdown(
         ? Number(tier?.sortOrder)
         : fallbackTierSortOrder(rawTierId),
       uom: String(tier?.uom ?? "").trim(),
-      hours: roundHours(hours),
+      hours,
     });
     total += hours;
   }
@@ -262,8 +262,13 @@ export function getWorksheetHourBreakdown(
 
   return {
     tiers: breakdown,
-    total: roundHours(total),
+    total,
   };
+}
+
+export function getWorksheetHourBreakdown(item: WorksheetHourItemLike, schedules: WorksheetHourRateScheduleLike[]): WorksheetHourBreakdown {
+  const raw = getRawWorksheetHourBreakdown(item, schedules);
+  return { tiers: raw.tiers.map(tier => ({ ...tier, hours: roundHours(tier.hours) })), total: roundHours(raw.total) };
 }
 
 export function getExtendedWorksheetHourBreakdown(
@@ -271,7 +276,8 @@ export function getExtendedWorksheetHourBreakdown(
   schedules: WorksheetHourRateScheduleLike[],
   quantity = 1,
 ): WorksheetHourBreakdown {
-  const base = getWorksheetHourBreakdown(item, schedules);
+  // Preserve per-unit productivity precision until after multiplying by quantity.
+  const base = getRawWorksheetHourBreakdown(item, schedules);
   const parsedQuantity = Number(quantity);
   const multiplier = Number.isFinite(parsedQuantity) ? parsedQuantity : 1;
 
