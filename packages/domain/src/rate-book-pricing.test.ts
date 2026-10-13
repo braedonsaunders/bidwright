@@ -298,3 +298,14 @@ test("rate currency uses read-time org configuration, without adopting the quote
   assert.equal(resolveRateBookLine(item, category, { currency: "EUR", rateBooks: [book] })!.snapshot.currency, "CAD");
   assert.equal(resolveRateBookLine(item, category, { rateBooks: [{ ...book, metadata: { currency: "USD" } }] })!.snapshot.currency, "USD");
 });
+
+test("authored tier IDs override names and duration follows the row unit", () => {
+  const book = { ...equipmentRateBooks()[0], scope: "revision" as const };
+  const resource = { ...book.items[0], metadata: { costRatesAuthored: true }, costRates: { day: 60, Daily: 999, Weekly: 250 } };
+  const row = worksheetItem({ rateScheduleItemId: resource.id, quantity: 2, uom: "WK", tierUnits: { day: 3 } });
+  const weekly = resolveRateBookLine(row, durationCategory, { rateBooks: [{ ...book, items: [resource] }] })!;
+  assert.equal(weekly.snapshot.totalCost, 1500, "2 resources × 3 weeks × authored weekly cost; no extra multiplier");
+  assert.equal(weekly.snapshot.totalPrice, 2700);
+  const daily = resolveRateBookLine({ ...row, uom: "DAY" }, durationCategory, { rateBooks: [{ ...book, items: [resource] }] })!;
+  assert.equal(daily.snapshot.totalCost, 360, "ID cost wins over the conflicting name entry");
+});

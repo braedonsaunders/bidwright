@@ -8,8 +8,14 @@ export async function getDocumentCoverage(projectId: string, db: Pick<typeof pri
     db.evidenceView.findMany({ where: { projectId }, select: { documentId: true, pageNumber: true, tool: true, sourceChecksum: true }, take: 5000, orderBy: { createdAt: "desc" } }),
     db.fileNode.findMany({ where: { projectId, scope: "project", type: "file" }, select: { id: true, name: true, documentId: true, metadata: true } }),
   ]);
+  // createProjectFile deliverables carry this flag; extracted source imports do not.
+  // Also omit linked extractions of outputs, without guessing from names/extensions.
+  const outputs = files.filter(f => (f.metadata as any)?.createdByAgent === true);
+  const outputDocuments = new Set(outputs.map(f => f.documentId ?? String((f.metadata as any)?.sourceDocumentId ?? "")));
+  const sourceDocuments = documents.filter(d => !outputDocuments.has(d.id));
+  const sourceFiles = files.filter(f => (f.metadata as any)?.createdByAgent !== true);
   const documentIds = new Set(documents.map(d => d.id));
-  const sources = [...documents.map(d => ({ ...d, name: d.fileName })), ...files.filter(f => !documentIds.has(f.documentId ?? String((f.metadata as any)?.sourceDocumentId ?? ""))).map(f => ({ id: f.id, name: f.name, pageCount: null, checksum: null }))];
+  const sources = [...sourceDocuments.map(d => ({ ...d, name: d.fileName })), ...sourceFiles.filter(f => !documentIds.has(f.documentId ?? String((f.metadata as any)?.sourceDocumentId ?? ""))).map(f => ({ id: f.id, name: f.name, pageCount: null, checksum: null }))];
   const aliases = new Map(files.flatMap(f => {
     const id = f.documentId ?? String((f.metadata as any)?.sourceDocumentId ?? f.id);
     return [[f.id, id], [`file-${f.id}`, id]] as Array<[string, string]>;

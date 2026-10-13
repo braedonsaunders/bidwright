@@ -54,7 +54,9 @@ export function summarizeDocumentCoverage(documents: Array<{ id: string; name?: 
     const unreadPages = doc.pageCount ? Array.from({length: doc.pageCount}, (_, i) => i+1).filter(p => !covered.has(p)) : [];
     const sheetsRead = expectedSheets.size > 0 && [...expectedSheets].every(s => completeSheets.has(s));
     return { documentId: doc.id, name: doc.name, sheetCount: expectedSheets.size || null, readSheetCount: completeSheets.size, status: !current.length && !visual.length ? "unread" : sheetsRead ? "read" : doc.pageCount && !unreadPages.length ? "pages delivered" : "partly read",
-      pageCount: doc.pageCount ?? null, textPageCount: textPages.size, textPages: [...textPages].sort((a,b)=>a-b).slice(0,10), viewedPageCount: viewedPages.length, viewedPages: viewedPages.slice(0,10), partialTextPages: [...partialPages].filter(p => !textPages.has(p)).sort((a,b)=>a-b).slice(0,10),
+      pageCount: doc.pageCount ?? null, deliveredPageCount: doc.pageCount ? doc.pageCount - unreadPages.length : null,
+      pageCoverage: doc.pageCount ? `${doc.pageCount - unreadPages.length}/${doc.pageCount} pages delivered` : null,
+      textPageCount: textPages.size, textPages: [...textPages].sort((a,b)=>a-b).slice(0,10), viewedPageCount: viewedPages.length, viewedPages: viewedPages.slice(0,10), partialTextPages: [...partialPages].filter(p => !textPages.has(p)).sort((a,b)=>a-b).slice(0,10),
       unreadPageCount: expectedSheets.size ? null : doc.pageCount ? unreadPages.length : null, unreadPages: expectedSheets.size ? [] : unreadPages.slice(0, 10),
       sections: [...new Set(current.map(r => r.section).filter(Boolean))].slice(0,10), readCalls: current.length, truncatedReads: current.filter(r => r.truncated).length, completeTextReads,
       fact: "Pages means delivered text or full-page images; tiles cover only a region. Page coverage follows recorded physical page text ranges. Historical reads without telemetry are unknown." };
