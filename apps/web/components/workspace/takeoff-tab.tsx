@@ -1061,9 +1061,6 @@ interface TakeoffTabProps {
   workspace: ProjectWorkspaceData;
   onOpenAgentChat?: (prefill?: string) => void;
   onOpenRevisionDiff?: () => void;
-  /** Navigate the workspace to the Documents tab (the "Project Files" intake
-   *  card). Absent in detached windows, where the card is hidden. */
-  onOpenDocuments?: () => void;
   onWorkspaceMutated?: () => void;
   initialDocumentId?: string | null;
   initialPage?: number;
@@ -1808,7 +1805,6 @@ export function TakeoffTab({
   workspace,
   onOpenAgentChat,
   onOpenRevisionDiff,
-  onOpenDocuments,
   onWorkspaceMutated,
   initialDocumentId,
   initialPage = 1,
@@ -2079,7 +2075,7 @@ export function TakeoffTab({
   // source, but it must not silently bypass the launcher on a fresh estimate
   // visit. Detached viewers remain direct-document surfaces.
   const [showLanding, setShowLanding] = useState(!detached && !initialEditorOpen);
-  type IntakeOptionId = "piping" | "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "scan" | "photo" | "files";
+  type IntakeOptionId = "piping" | "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "scan" | "photo";
   const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId | null>(null);
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
   const [spreadsheetPreviewLoading, setSpreadsheetPreviewLoading] = useState(false);
@@ -8833,7 +8829,6 @@ export function TakeoffTab({
   }
 
   const intakeOptions: WorkspaceLaunchItem<IntakeOptionId>[] = [
-    { id: "piping", title: "Piping", description: "Review and edit saved piping quantities.", metric: pipingDocuments.length.toLocaleString(), metricLabel: "sources", icon: FileJson, tone: "teal", ghostIcon: true },
     {
       id: "spreadsheet",
       title: "Spreadsheet / CSV",
@@ -8904,25 +8899,12 @@ export function TakeoffTab({
       tone: "cyan",
       ghostIcon: true,
     },
-    // Fills the 8th grid slot: jump to the Documents tab to upload/manage
-    // sources. Hidden in detached windows (no workspace tabs to switch).
-    ...(onOpenDocuments
-      ? [{
-          id: "files" as const,
-          title: "Project Files",
-          description: "Upload and manage drawings, models, scans, and photos.",
-          metric: fileTreeNodes.filter((n) => n.type === "file").length.toLocaleString(),
-          metricLabel: "files",
-          icon: FolderOpen,
-          tone: "teal" as const,
-          ghostIcon: true,
-        }]
-      : []),
+    { id: "piping", title: "Isometric", description: "Review and edit saved piping quantities.", metric: pipingDocuments.length.toLocaleString(), metricLabel: "sources", icon: FileJson, tone: "teal", ghostIcon: true },
   ];
 
   const activeSourcePanel =
     activeIntakeOption === "piping"
-      ? { title: "Piping sources", detail: "Spoolyard and PCF files", emptyLabel: "No piping sources", docs: pipingDocuments, icon: FileJson }
+      ? { title: "Isometric sources", detail: "Spoolyard and PCF files", emptyLabel: "No isometric sources", docs: pipingDocuments, icon: FileJson }
       : activeIntakeOption === "pdf"
       ? {
           title: "PDF sources",
@@ -8999,15 +8981,10 @@ export function TakeoffTab({
                   showBreakdowns={false}
                   showSummaries={false}
                   className="flex-1"
-                  // 7 intake cards: 4-across on desktop keeps two rows that fill
-                  // the panel; the minmax floor + scroll fallback means cards can
-                  // never clip on short viewports (fit-mode clips by default).
-                  gridClassName="grid-cols-2 gap-2.5 lg:grid-cols-4 auto-rows-[minmax(150px,1fr)] overflow-y-auto"
+                  // Fixed 2x4 grid that stretches to the panel height — no scroll.
+                  gridClassName="grid-cols-4 md:grid-cols-4 lg:grid-cols-4 grid-rows-2 gap-2.5"
                   items={intakeOptions}
-                  onSelect={(id) => {
-                    if (id === "files") onOpenDocuments?.();
-                    else setActiveIntakeOption(id);
-                  }}
+                  onSelect={(id) => setActiveIntakeOption(id)}
                 />
               </motion.div>
             ) : (
