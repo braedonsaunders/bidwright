@@ -92,3 +92,49 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+
+-----------------------------------------------------------
+Hershey Roman Simplex stroke font (src/core/stroke-font.ts)
+-----------------------------------------------------------
+
+The single-stroke CAD lettering in src/core/stroke-font.ts is converted
+from the Hershey Roman Simplex glyph data (file rowmans.jhf, as
+distributed in github.com/kamalmostafa/hershey-fonts). The glyph
+coordinates are kept in their original encoding; spacing and a few
+drafting symbols were added for Spoolyard.
+
+The Hershey Fonts were originally created by Dr. A. V. Hershey while
+working at the U. S. National Bureau of Standards.
+
+The format of the Font data in this distribution was originally created
+by
+	James Hurt
+	Cognition, Inc.
+	900 Technology Park Drive
+	Billerica, MA 01821
+	(mit-eddie!ci-dandelion!hurt)
+
+Hershey fonts license, as distributed with the font data:
+
+ This distribution of the Hershey Fonts may be used by anyone for
+ any purpose, commercial or otherwise, providing that:
+ 	1. The following acknowledgements must be distributed with
+ 		the font data:
+ 		- The Hershey Fonts were originally created by Dr.
+ 			A. V. Hershey while working at the U. S.
+ 			National Bureau of Standards.
+ 		- The format of the Font data in this distribution
+ 			was originally created by
+ 				James Hurt
+ 				Cognition, Inc.
+ 				900 Technology Park Drive
+ 				Billerica, MA 01821
+ 				(mit-eddie!ci-dandelion!hurt)
+ 	2. The font data in this distribution may be converted into
+ 		any other format *EXCEPT* the format distributed by
+ 		the U.S. NTIS (which organization holds the rights
+ 		to the distribution and use of the font data in that
+ 		particular format). Not that anybody would really
+ 		*want* to use their format... each point is described
+ 		in eight bytes as "xxx yyy:", where xxx and yyy are
+ 		the coordinate values as ASCII numbers.
