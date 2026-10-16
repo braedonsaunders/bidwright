@@ -43,8 +43,8 @@ jobs:
     timeout-minutes: 40
     services:
       reference-search-db:
-        # Docker Official Images mirror avoids shared-runner Docker Hub limits.
-        image: public.ecr.aws/docker/library/postgres:16
+        # Google cache of Docker Official Images avoids Docker Hub and ECR shared-runner limits.
+        image: mirror.gcr.io/library/postgres:16
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
