@@ -1,6 +1,7 @@
 {
   "schema": "bidwright-piping",
   "version": 1,
+  "draftingRules": 1,
   "title": "Cooling water return \u2014 Pump P-101",
   "drawing": "ISO-CW-101",
   "revision": "B",
@@ -42,14 +43,16 @@
         "Welded/Flanged General Parameters.Lap Joint Flange Weight": "STD",
         "Welded/Flanged General Parameters.Plug Valve Type": "REG",
         "Welded/Flanged General Parameters.WOL/EOL Weight": "STD",
-        "Welded/Flanged General Parameters.Weld Gap Table": "1"
+        "Welded/Flanged General Parameters.Weld Gap Table": "1",
+        "Labour.Weld Hours Per Diameter-Inch": "0.5 (sample estimating rate: carbon steel butt welds, standard wall, shop fit-up and welding; replace with your own rate)",
+        "Labour.Pipe Hours Per Metre": "0.3 (sample estimating rate: handling, cutting and bevelling per metre of pipe; replace with your own rate)"
       },
       "rootGap": 1.6,
       "socketGap": 1.6,
       "density": 7850,
       "pipeCostM": 0,
-      "pipeLaborHoursM": 0,
-      "weldHoursPerDiameterInch": 0,
+      "pipeLaborHoursM": 0.3,
+      "weldHoursPerDiameterInch": 0.5,
       "sizes": [
         {
           "nps": 0.125,
@@ -5813,7 +5816,8 @@
           "takeout": 146.05,
           "faceToFace": 292.1,
           "flangeOd": 228.6,
-          "source": "ASME B16 standard dimensions"
+          "source": "ASME B16 standard dimensions; weight: representative published weight, Crane Figure 147 (Class 150 bolted-cap swing check, flanged RF, 4\"): 110.23 lb (50 kg), Crane ChemPharma & Energy Cast Steel Valves technical datasheet (2018); confirm against the supplier's data",
+          "weightKg": 50
         },
         {
           "id": "A/CHECK-FL-5",
@@ -12436,7 +12440,8 @@
           "takeout": 114.3,
           "faceToFace": 228.6,
           "flangeOd": 228.6,
-          "source": "ASME B16 standard dimensions"
+          "source": "ASME B16 standard dimensions; weight: representative published weight, Crane Figure 47 (Class 150 OS&Y flexible-wedge gate, flanged RF, 4\"): 110.23 lb (50 kg), Crane ChemPharma & Energy Cast Steel Valves technical datasheet (2018); confirm against the supplier's data",
+          "weightKg": 50
         },
         {
           "id": "A/GATE-FL-5",
