@@ -3,7 +3,7 @@ export * from "./api/settings";
 export * from "./api/auth";
 export * from "./api/integrations";
 
-import { apiBaseUrl, apiRequest, resolveApiUrl } from "./api/client";
+import { ApiError, apiBaseUrl, apiRequest, resolveApiUrl } from "./api/client";
 import { uploadFileChunked } from "./chunked-upload";
 
 export interface ProjectQuoteSummary {
@@ -2691,6 +2691,43 @@ export async function updateEstimateFactorLibraryEntry(entryId: string, patch: E
 
 export async function deleteEstimateFactorLibraryEntry(entryId: string) {
   return apiRequest<{ deleted: boolean }>(`/factor-library/${entryId}`, {
+    method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Piping specification library (the organisation's Spoolyard specs)
+// ---------------------------------------------------------------------------
+
+import type { PipingSpecLibraryEntry, PipingSpecLibrarySummary } from "@bidwright/domain";
+export type { PipingSpecLibraryEntry, PipingSpecLibrarySummary } from "@bidwright/domain";
+
+export async function listPipingSpecLibrary() {
+  return apiRequest<PipingSpecLibrarySummary[]>("/api/piping/spec-library");
+}
+
+/** The kept spec, or null when the library has none under that id. */
+export async function getPipingSpecLibraryEntry(specId: string) {
+  try {
+    return await apiRequest<PipingSpecLibraryEntry>(`/api/piping/spec-library/${encodeURIComponent(specId)}`);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+export async function putPipingSpecLibraryEntry(spec: Record<string, unknown> & { id: string }) {
+  return apiRequest<PipingSpecLibrarySummary>(`/api/piping/spec-library/${encodeURIComponent(spec.id)}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ spec }),
+  });
+}
+
+export async function deletePipingSpecLibraryEntry(specId: string) {
+  return apiRequest<{ deleted: boolean }>(`/api/piping/spec-library/${encodeURIComponent(specId)}`, {
     method: "DELETE",
   });
 }

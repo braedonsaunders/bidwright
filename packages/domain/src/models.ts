@@ -629,6 +629,28 @@ export interface EstimateFactorLibraryEntry {
   updatedAt: string;
 }
 
+/** A piping specification in the organisation's Spoolyard library, without the spec itself. */
+export interface PipingSpecLibrarySummary {
+  id: string;
+  organizationId: string;
+  /** Spoolyard's spec id, the library key. */
+  specId: string;
+  name: string;
+  material: string;
+  service: string;
+  rating: string;
+  revision: string;
+  /** fittings.length + sizes.length */
+  rowCount: number;
+  updatedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PipingSpecLibraryEntry extends PipingSpecLibrarySummary {
+  spec: Record<string, unknown>;
+}
+
 export interface Modifier {
   id: string;
   revisionId: string;

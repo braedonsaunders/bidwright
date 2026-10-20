@@ -33,6 +33,8 @@ import type {
   LaborUnitLibrary,
   Modifier,
   Phase,
+  PipingSpecLibraryEntry,
+  PipingSpecLibrarySummary,
   Plugin,
   PluginExecution,
   Project,
@@ -605,6 +607,27 @@ export function mapEstimateFactorLibraryEntry(f: any): EstimateFactorLibraryEntr
     createdAt: toISO(f.createdAt),
     updatedAt: toISO(f.updatedAt),
   };
+}
+
+export function mapPipingSpecLibrarySummary(e: any): PipingSpecLibrarySummary {
+  return {
+    id: e.id,
+    organizationId: e.organizationId,
+    specId: e.specId,
+    name: e.name ?? "",
+    material: e.material ?? "",
+    service: e.service ?? "",
+    rating: e.rating ?? "",
+    revision: e.revision ?? "",
+    rowCount: e.rowCount ?? 0,
+    updatedBy: e.updatedBy ?? null,
+    createdAt: toISO(e.createdAt),
+    updatedAt: toISO(e.updatedAt),
+  };
+}
+
+export function mapPipingSpecLibraryEntry(e: any): PipingSpecLibraryEntry {
+  return { ...mapPipingSpecLibrarySummary(e), spec: (e.data as Record<string, unknown>) ?? {} };
 }
 
 export function mapModifier(m: any): Modifier {

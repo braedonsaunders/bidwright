@@ -33,6 +33,7 @@ model Organization {
   plugins                  Plugin[]
   entityCategories         EntityCategory[]
   conditionLibrary         ConditionLibraryEntry[]
+  pipingSpecLibrary        PipingSpecLibraryEntry[]
   knowledgeBooks           KnowledgeBook[]
   knowledgeDocuments       KnowledgeDocument[]
   knowledgeLibraryCabinets KnowledgeLibraryCabinet[]
@@ -1908,6 +1909,30 @@ model ConditionLibraryEntry {
   value          String
 
   @@index([organizationId])
+}
+
+// ── Piping Specification Library (global per-org) ─────────────────────────
+
+// Piping specifications the organisation keeps for Spoolyard. A spec is keyed
+// by its Spoolyard id: saving one under an existing id replaces it. The summary
+// columns are derived from `data` on write so listing never loads the spec.
+model PipingSpecLibraryEntry {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  specId         String
+  name           String       @default("")
+  material       String       @default("")
+  service        String       @default("")
+  rating         String       @default("")
+  revision       String       @default("")
+  rowCount       Int          @default(0)
+  data           Json
+  updatedBy      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, specId])
 }
 
 // ── Plugins ───────────────────────────────────────────────────────────────

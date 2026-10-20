@@ -122,6 +122,7 @@ jobs:
         run: >
           pnpm exec tsx --test
           apps/api/src/services/piping/piping.test.ts
+          apps/api/src/routes/piping-routes.test.ts
           apps/api/src/bootstrap-key-validation.test.ts
           apps/api/src/settings-secret-crypto.test.ts
           apps/api/src/services/agent-host/launcher-identity.test.ts

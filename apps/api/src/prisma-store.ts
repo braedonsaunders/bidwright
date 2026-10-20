@@ -239,6 +239,8 @@ import {
   mapEstimateCalibrationFeedback,
   mapEstimateFactor,
   mapEstimateFactorLibraryEntry,
+  mapPipingSpecLibraryEntry,
+  mapPipingSpecLibrarySummary,
   mapEstimateStrategy,
   mapFileNode,
   mapIngestionJob,
@@ -1105,6 +1107,19 @@ export interface CreateEstimateFactorLibraryEntryInput {
 }
 
 export interface EstimateFactorLibraryEntryPatchInput extends CreateEstimateFactorLibraryEntryInput {}
+
+/** A Spoolyard piping specification, as validated by the spec library route. */
+export interface PipingSpecInput {
+  id: string;
+  name: string;
+  material: string;
+  rating: string;
+  service?: string | null;
+  revision?: string | null;
+  sizes: unknown[];
+  fittings: unknown[];
+  [key: string]: unknown;
+}
 
 export interface CreateConditionInput {
   type: string;
@@ -10696,6 +10711,53 @@ export class PrismaApiStore {
     if (!existing) throw new Error(`Estimate factor library entry ${entryId} not found`);
     await this.db.estimateFactorLibraryEntry.delete({ where: { id: entryId } });
     return mapEstimateFactorLibraryEntry(existing);
+  }
+
+  // ── Piping Specification Library ─────────────────────────────────────────
+
+  async listPipingSpecLibrary() {
+    // Summaries only: a spec can be ~1 MB and the list never needs it.
+    const entries = await this.db.pipingSpecLibraryEntry.findMany({
+      where: { organizationId: this.organizationId },
+      omit: { data: true },
+      orderBy: { specId: "asc" },
+    });
+    return entries.map(mapPipingSpecLibrarySummary);
+  }
+
+  async getPipingSpecLibraryEntry(specId: string) {
+    const entry = await this.db.pipingSpecLibraryEntry.findUnique({
+      where: { organizationId_specId: { organizationId: this.organizationId, specId } },
+    });
+    return entry ? mapPipingSpecLibraryEntry(entry) : null;
+  }
+
+  /** Saves a spec under its id, replacing any spec already kept under that id. */
+  async putPipingSpecLibraryEntry(spec: PipingSpecInput) {
+    const summary = {
+      name: spec.name,
+      material: spec.material,
+      service: spec.service ?? "",
+      rating: spec.rating,
+      revision: spec.revision ?? "",
+      rowCount: spec.fittings.length + spec.sizes.length,
+      data: spec as Prisma.InputJsonValue,
+      updatedBy: this._userId,
+    };
+    const entry = await this.db.pipingSpecLibraryEntry.upsert({
+      where: { organizationId_specId: { organizationId: this.organizationId, specId: spec.id } },
+      create: { id: createId("pipespec"), organizationId: this.organizationId, specId: spec.id, ...summary },
+      update: summary,
+      omit: { data: true },
+    });
+    return mapPipingSpecLibrarySummary(entry);
+  }
+
+  async deletePipingSpecLibraryEntry(specId: string) {
+    const { count } = await this.db.pipingSpecLibraryEntry.deleteMany({
+      where: { organizationId: this.organizationId, specId },
+    });
+    return count > 0;
   }
 
   async listModifiers(projectId: string) {

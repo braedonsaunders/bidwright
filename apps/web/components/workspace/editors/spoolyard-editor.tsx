@@ -3,6 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Loader2, Save } from "lucide-react";
 import { Button } from "@braedonsaunders/appkit-ui";
+import {
+  ApiError,
+  deletePipingSpecLibraryEntry,
+  getPipingSpecLibraryEntry,
+  listPipingSpecLibrary,
+  putPipingSpecLibraryEntry,
+  type PipingSpecLibrarySummary,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type SaveStatus = "opening" | "saved" | "unsaved" | "saving" | "error";
@@ -13,7 +21,60 @@ type SpoolyardMessage = {
   content?: string;
   status?: SaveStatus;
   error?: string;
+  op?: string;
+  specId?: string;
+  spec?: { id?: unknown } & Record<string, unknown>;
 };
+
+/** The summary Spoolyard keeps for a library spec; updatedAt is epoch milliseconds. */
+const spoolyardSummary = (s: PipingSpecLibrarySummary) => ({
+  id: s.specId,
+  name: s.name,
+  material: s.material,
+  service: s.service,
+  rating: s.rating,
+  revision: s.revision,
+  rowCount: s.rowCount,
+  updatedAt: Date.parse(s.updatedAt),
+});
+
+/** The API's own message where it gave one: the drafter sees it in Spoolyard. */
+function libraryErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    try {
+      const body = JSON.parse(error.body);
+      if (typeof body.message === "string") return body.message;
+    } catch {
+      /* use the request error below */
+    }
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Answers a spoolyard:library request from the organisation's piping specification library. */
+async function answerLibraryRequest(data: SpoolyardMessage): Promise<unknown> {
+  const specId = () => {
+    if (typeof data.specId !== "string" || !data.specId) throw new Error("The request names no specification.");
+    return data.specId;
+  };
+  switch (data.op) {
+    case "list":
+      return (await listPipingSpecLibrary()).map(spoolyardSummary).sort((a, b) => a.id.localeCompare(b.id));
+    case "get":
+      return (await getPipingSpecLibraryEntry(specId()))?.spec ?? null;
+    case "put": {
+      const spec = data.spec;
+      if (!spec || typeof spec.id !== "string") throw new Error("The request carries no specification.");
+      // The server derives the summary from the spec; the one Spoolyard sends is not trusted.
+      return spoolyardSummary(await putPipingSpecLibraryEntry({ ...spec, id: spec.id }));
+    }
+    case "remove":
+      await deletePipingSpecLibraryEntry(specId());
+      return null;
+    default:
+      throw new Error(`Unknown specification library request "${String(data.op)}".`);
+  }
+}
 
 const hostTheme = () =>
   typeof document !== "undefined" && document.documentElement.classList.contains("dark") ? "dark" : "light";
@@ -21,7 +82,8 @@ const hostTheme = () =>
 /**
  * Spoolyard (github.com/braedonsaunders/spoolyard), the piping isometric editor, embedded from
  * /spoolyard like the CAD and model editors. BidWright draws the single header; Spoolyard autosaves
- * through postMessage and this host writes the file.
+ * through postMessage and this host writes the file. BidWright also keeps the drafter's piping
+ * specification library (the organisation's), offered in answer to spoolyard:ready.
  */
 export function SpoolyardEditor({
   fileUrl,
@@ -53,7 +115,15 @@ export function SpoolyardEditor({
       if (event.origin !== window.location.origin || event.source !== iframeRef.current?.contentWindow) return;
       const data = event.data;
       if (data?.source !== "spoolyard") return;
-      if (data.type === "spoolyard:status" && data.status) {
+      if (data.type === "spoolyard:ready") {
+        post({ type: "spoolyard:capabilities", library: { label: "BidWright" } });
+      } else if (data.type === "spoolyard:library" && typeof data.id === "string") {
+        try {
+          post({ type: "spoolyard:library-result", id: data.id, ok: true, result: await answerLibraryRequest(data) });
+        } catch (e) {
+          post({ type: "spoolyard:library-result", id: data.id, ok: false, error: libraryErrorMessage(e) });
+        }
+      } else if (data.type === "spoolyard:status" && data.status) {
         setStatus(data.status);
         setError(data.error ?? "");
       } else if (data.type === "spoolyard:save" && typeof data.content === "string") {
