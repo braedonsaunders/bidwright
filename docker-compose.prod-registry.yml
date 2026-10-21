@@ -177,8 +177,11 @@ services:
       retries: 12
       start_period: 60s
     networks:
-      - default
-      - dokploy-network
+      default: {}
+      dokploy-network:
+        # Reserve the overlay endpoint: dynamic allocation after an engine
+        # restart can reuse a Swarm VIP and break unrelated shared services.
+        ipv4_address: ${BIDWRIGHT_DOKPLOY_API_IPV4:-10.0.1.221}
 
   web:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-web:${BIDWRIGHT_TAG:-latest}"
@@ -218,8 +221,9 @@ services:
       retries: 12
       start_period: 30s
     networks:
-      - default
-      - dokploy-network
+      default: {}
+      dokploy-network:
+        ipv4_address: ${BIDWRIGHT_DOKPLOY_WEB_IPV4:-10.0.1.220}
 
   worker:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-worker:${BIDWRIGHT_TAG:-latest}"
