@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,9 +18,26 @@ try {
   });
 }
 
+// A page opened before this update still runs the previous build, which loads parts of itself (PDF export, the 3D
+// review) on demand by their hashed names. The previous build's own assets are kept beside the new ones for one release
+// so those pages keep working until they reload; assets carried over from earlier releases are dropped.
+const assets = join(target, "assets"), carriedList = join(assets, ".carried");
+const carried = new Set((await readFile(carriedList, "utf8").catch(() => "")).split("\n").filter(Boolean));
+const previous = [];
+for (const name of await readdir(assets).catch(() => [])) {
+  if (name === ".carried" || carried.has(name)) continue;
+  previous.push({ name, bytes: await readFile(join(assets, name)) });
+}
 await mkdir(dirname(target), { recursive: true });
 await rm(target, { recursive: true, force: true });
 await cp(source, target, { recursive: true });
+const kept = [];
+for (const { name, bytes } of previous) {
+  if (await stat(join(assets, name)).catch(() => null)) continue;
+  await writeFile(join(assets, name), bytes);
+  kept.push(name);
+}
+await writeFile(carriedList, kept.join("\n") + (kept.length ? "\n" : ""));
 const commit = execFileSync("git", ["-C", spoolyard, "rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim();
 await writeFile(join(target, "VERSION"), commit + "\n");
 console.log(`Synced Spoolyard ${commit} to apps/web/public/spoolyard`);
