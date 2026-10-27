@@ -18,6 +18,8 @@ test("only self-authenticating auth endpoints are public", () => {
     "/api/auth/profile",
     "/api/auth/organizations",
     "/api/auth/switch-org",
+    "/api/setup/seed",
+    "/api/setup/seed-essentials",
   ]) {
     assert.equal(isPublicRoute(path), false, path);
   }
