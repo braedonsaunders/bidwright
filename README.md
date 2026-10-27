@@ -203,6 +203,10 @@ Bidwright is licensed under the [GNU Affero General Public License v3.0 only](LI
 
 Copyright (C) 2026 Braedon Saunders.
 
+### Built on
+
+The 2D CAD editor (`apps/cad-editor`) is built on [CAD-Viewer](https://github.com/mlightcad/cad-viewer) by mlightcad (MIT). The 3D model editor (`apps/model-editor`) began as a fork of [Chili3D](https://github.com/xiangechen/chili3d) by xiangechen (AGPL-3.0). Its geometry kernel is [Open CASCADE Technology](https://github.com/Open-Cascade-SAS/OCCT) compiled to WebAssembly, and DWG export uses [GNU LibreDWG](https://www.gnu.org/software/libredwg/). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for locations and licenses.
+
 ---
 
 ## Also in this suite
