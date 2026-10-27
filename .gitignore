@@ -62,6 +62,3 @@ fixtures/local/
 *.quote-package.zip
 *.intake-package.zip
 *.rfq.zip
-
-# Personal Claude Code settings
-.claude/settings.local.json
