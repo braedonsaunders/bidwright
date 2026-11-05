@@ -8,7 +8,6 @@ const PUBLIC_EXACT_ROUTES = [
   "/api/auth/me",
   "/api/setup/status",
   "/api/setup/init",
-  "/api/setup/seed-essentials",
 ];
 
 const AUTHENTICATED_ROUTES_WITHOUT_ORG_CONTEXT = [

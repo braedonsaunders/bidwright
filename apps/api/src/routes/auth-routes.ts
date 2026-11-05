@@ -586,10 +586,16 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   // ── POST /api/setup/seed-essentials ───────────────────────────────────
-  // Seed just entity categories (needed for the app to work). Public during setup.
+  // Seed just entity categories (needed for the app to work). Requires super
+  // admin, or an admin of the organization being seeded.
   fastify.post("/api/setup/seed-essentials", async (request: FastifyRequest, reply: FastifyReply) => {
-    const { organizationId } = request.body as { organizationId: string };
+    const { organizationId } = (request.body ?? {}) as { organizationId?: string };
     if (!organizationId) return reply.code(400).send({ error: "organizationId is required" });
+
+    const isOrgAdmin = request.user?.role === "admin" && request.user.organizationId === organizationId;
+    if (!request.user?.isSuperAdmin && !isOrgAdmin) {
+      return reply.code(403).send({ error: "Administrator access to this organization is required" });
+    }
 
     const org = await prisma.organization.findUnique({ where: { id: organizationId } });
     if (!org) return reply.code(404).send({ error: "Organization not found" });

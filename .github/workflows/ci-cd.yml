@@ -175,6 +175,7 @@ jobs:
           apps/api/src/services/cli-prompt-caching.test.ts
           apps/api/src/services/runtime-broker-worker.test.ts
           apps/api/src/middleware/auth-route-policy.test.ts
+          apps/api/src/routes/settings-user-routes.test.ts
           apps/api/src/prisma-store-search.test.ts
           packages/agent/src/llm/adapters/anthropic-stream.test.ts
           packages/agent/src/llm/stream-completion.test.ts

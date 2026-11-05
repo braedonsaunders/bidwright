@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import { invalidProviderKeys } from "@bidwright/db";
@@ -66,6 +66,34 @@ function normalizeNavigationConfig(config: TenantNavigationConfig): TenantNaviga
   };
 }
 
+const userRoleSchema = z.enum(["admin", "estimator", "viewer"]);
+const createUserSchema = z
+  .object({
+    email: z.string().trim().min(1),
+    name: z.string().trim().min(1),
+    role: userRoleSchema,
+    password: z.string().min(1).optional(),
+  })
+  .strict();
+const userPatchSchema = z
+  .object({
+    email: z.string().trim().min(1).optional(),
+    name: z.string().trim().min(1).optional(),
+    role: userRoleSchema.optional(),
+    active: z.boolean().optional(),
+    password: z.string().min(1).optional(),
+  })
+  .strict();
+
+function isOrgAdmin(request: FastifyRequest): boolean {
+  return request.user?.role === "admin" || request.user?.isSuperAdmin === true;
+}
+
+function rejectNonAdmin(request: FastifyRequest, reply: FastifyReply, action: string) {
+  if (isOrgAdmin(request)) return null;
+  return reply.code(403).send({ message: `Administrator access is required to ${action}.` });
+}
+
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/personas", async (request) => {
     return request.store!.listEstimatorPersonas();
@@ -99,7 +127,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.patch("/settings/navigation", async (request, reply) => {
-    if (request.user?.role !== "admin" && !request.user?.isSuperAdmin) {
+    if (!isOrgAdmin(request)) {
       return reply.code(403).send({
         error: "Administrator access is required to change organization navigation.",
       });
@@ -295,12 +323,14 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/users", async (request, reply) => {
-    const body = request.body as CreateUserInput;
-    if (!body.email || !body.name || !body.role) {
-      return reply.code(400).send({ message: "email, name, and role are required" });
+    const denied = rejectNonAdmin(request, reply, "add users");
+    if (denied) return denied;
+    const parsed = createUserSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "email, name, and a valid role (admin, estimator, viewer) are required" });
     }
     try {
-      const user = await request.store!.createUser(body);
+      const user = await request.store!.createUser(parsed.data satisfies CreateUserInput);
       const { passwordHash, ...safeUser } = user as any;
       reply.code(201);
       return safeUser;
@@ -310,10 +340,15 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.patch("/users/:userId", async (request, reply) => {
+    const denied = rejectNonAdmin(request, reply, "change users");
+    if (denied) return denied;
     const { userId } = request.params as { userId: string };
-    const patch = request.body as UserPatchInput;
+    const parsed = userPatchSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid user update", details: parsed.error.flatten() });
+    }
     try {
-      const user = await request.store!.updateUser(userId, patch);
+      const user = await request.store!.updateUser(userId, parsed.data satisfies UserPatchInput);
       const { passwordHash, ...safeUser } = user as any;
       return safeUser;
     } catch (error) {
@@ -322,6 +357,8 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.delete("/users/:userId", async (request, reply) => {
+    const denied = rejectNonAdmin(request, reply, "remove users");
+    if (denied) return denied;
     const { userId } = request.params as { userId: string };
     try {
       const user = await request.store!.deleteUser(userId);
